@@ -263,20 +263,37 @@ class SimilarChecker(BaseChecker, Similar):
                          ignore_comments=True, ignore_docstrings=True)
         self.stats = None
 
-    def set_option(self, optname, value, action=None, optdict=None):
-        """method called to set an option (registered in the options list)
+    @property
+    def min_lines(self):
+        return self.config.min_similarity_lines
 
-        overridden to report options setting to Similar
-        """
-        BaseChecker.set_option(self, optname, value, action, optdict)
-        if optname == 'min-similarity-lines':
-            self.min_lines = self.config.min_similarity_lines
-        elif optname == 'ignore-comments':
-            self.ignore_comments = self.config.ignore_comments
-        elif optname == 'ignore-docstrings':
-            self.ignore_docstrings = self.config.ignore_docstrings
-        elif optname == 'ignore-imports':
-            self.ignore_imports = self.config.ignore_imports
+    @min_lines.setter
+    def min_lines(self, _):
+        pass
+
+    @property
+    def ignore_comments(self):
+        return self.config.ignore_comments
+
+    @ignore_comments.setter
+    def ignore_comments(self, _):
+        pass
+
+    @property
+    def ignore_docstrings(self):
+        return self.config.ignore_docstrings
+
+    @ignore_docstrings.setter
+    def ignore_docstrings(self, _):
+        pass
+
+    @property
+    def ignore_imports(self):
+        return self.config.ignore_imports
+
+    @ignore_imports.setter
+    def ignore_imports(self, _):
+        pass
 
     def open(self):
         """init the checkers: reset linesets and statistics information"""

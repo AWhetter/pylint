@@ -19,6 +19,7 @@ import collections
 import copy
 import functools
 import io
+import numbers
 import os
 import pickle
 import re
@@ -175,55 +176,56 @@ to search for configuration file.
 ''' % globals()
 
 
-class UnsupportedAction(Exception):
-    """raised by set_option when it doesn't know what to do for an action"""
-
-
 def _multiple_choice_validator(choices, name, value):
     values = utils._check_csv(value)
     for csv_value in values:
         if csv_value not in choices:
             msg = "option %s: invalid value: %r, should be in %s"
-            raise argparse.ArgumentError(msg % (name, csv_value, choices))
+            raise argparse.ArgumentError(msg % (name, csv_value, choices), name)
     return values
 
 
-def _choice_validator(choices, name, value):
-    if value not in choices:
-        msg = "option %s: invalid value: %r, should be in %s"
-        raise argparse.ArgumentError(msg % (name, value, choices))
-    return value
-
 # pylint: disable=unused-argument
-def _csv_validator(_, name, value):
+def _csv_validator(value):
     return utils._check_csv(value)
 
 
 # pylint: disable=unused-argument
-def _regexp_validator(_, name, value):
+def _regexp_validator(value):
     if hasattr(value, 'pattern'):
         return value
     return re.compile(value)
 
 # pylint: disable=unused-argument
-def _regexp_csv_validator(_, name, value):
-    return [_regexp_validator(_, name, val) for val in _csv_validator(_, name, value)]
+def _regexp_csv_validator(value):
+    return [_regexp_validator(val) for val in _csv_validator(value)]
 
-def _yn_validator(opt, _, value):
+def _yn_validator(value):
     if isinstance(value, int):
         return bool(value)
     if value in ('y', 'yes'):
         return True
     if value in ('n', 'no'):
         return False
-    msg = "option %s: invalid yn value %r, should be in (y, yes, n, no)"
-    raise argparse.ArgumentError(msg % (opt, value))
+    import pdb
+    pdb.set_trace()
+    msg = "Invalid yn value %r, should be in (y, yes, n, no)"
+    raise exceptions.ConfigurationError(msg % value)
 
 
-def _non_empty_string_validator(opt, _, value):
+def _file_yn_validator(value):
+    # OptionParser does some converting of it's own so translate that first.
+    if value in ('1', 'True'):
+        return True
+    if value in ('0', 'False'):
+        return False
+    return _yn_validator(value)
+
+
+def _non_empty_string_validator(value):
     if not value:
         msg = "indent string can't be empty."
-        raise argparse.ArgumentError(msg)
+        raise exceptions.ConfigurationError(msg)
     return utils._unquote(value)
 
 
@@ -234,64 +236,13 @@ VALIDATORS = {
     'regexp_csv': _regexp_csv_validator,
     'csv': _csv_validator,
     'yn': _yn_validator,
-    'choice': lambda opt, name, value: _choice_validator(opt['choices'], name, value),
-    'multiple_choice': lambda opt, name, value: _multiple_choice_validator(opt['choices'],
-                                                                           name, value),
+    'multiple_choice': _multiple_choice_validator,
     'non_empty_string': _non_empty_string_validator,
 }
-
-def _call_validator(opttype, optdict, option, value):
-    if opttype not in VALIDATORS:
-        raise Exception('Unsupported type "%s"' % opttype)
-    try:
-        return VALIDATORS[opttype](optdict, option, value)
-    except TypeError:
-        try:
-            return VALIDATORS[opttype](value)
-        except Exception:
-            raise argparse.ArgumentError('%s value (%r) should be of type %s' %
-                                            (option, value, opttype))
-
-
-def _validate(value, optdict, name=''):
-    """return a validated value for an option according to its type
-
-    optional argument name is only used for error message formatting
-    """
-    try:
-        _type = optdict['type']
-    except KeyError:
-        # FIXME
-        return value
-    return _call_validator(_type, optdict, name, value)
-
-
-def _level_options(group, outputlevel):
-    return [option for option in group.option_list
-            if (getattr(option, 'level', 0) or 0) <= outputlevel
-            and option.help is not argparse.SUPPRESS]
-
-
-def _multiple_choices_validating_option(opt, name, value):
-    return _multiple_choice_validator(opt.choices, name, value)
 
 
 class OptionsManagerMixIn(object):
     """Handle configuration from both a configuration file and command line options"""
-
-    class CallbackAction(argparse.Action):
-        """Doesn't store the value on the config."""
-        def __init__(self, nargs=None, **kwargs):
-            nargs = nargs or int('metavar' in kwargs)
-            super(OptionsManagerMixIn.CallbackAction, self).__init__(
-                nargs=nargs, **kwargs
-            )
-
-        def __call__(self, parser, namespace, values, option_string):
-            # If no value was passed, argparse didn't call the callback via
-            # `type`, so we need to do it ourselves.
-            if not self.nargs and callable(self.type):
-                self.type(self, option_string, values, parser)
 
     def __init__(self, usage, config_file=None, version=None, quiet=0):
         self.config_file = config_file
@@ -301,11 +252,10 @@ class OptionsManagerMixIn(object):
         # dictionary associating option name to checker
         self._all_options = collections.OrderedDict()
         self._short_options = {}
-        self._nocallback_options = {}
-        self._mygroups = {}
+        # TODO: Move this to the runner when this class is removed.
+        self._global_config = Configuration()
         # verbosity
         self.quiet = quiet
-        self._maxlevel = 0
 
     def reset_parsers(self, usage='', version=None):
         # configuration file parser
@@ -316,127 +266,21 @@ class OptionsManagerMixIn(object):
     def register_options_provider(self, provider, own_group=True):
         """register an options provider"""
         assert provider.priority <= 0, "provider's priority can't be >= 0"
+        provider.config = self._global_config
         for i in range(len(self.options_providers)):
             if provider.priority > self.options_providers[i].priority:
                 self.options_providers.insert(i, provider)
                 break
         else:
             self.options_providers.append(provider)
-        non_group_spec_options = [option for option in provider.options
-                                  if 'group' not in option[1]]
-        groups = getattr(provider, 'option_groups', ())
-        if own_group and non_group_spec_options:
-            self.add_option_group(provider.name.upper(), provider.__doc__,
-                                  non_group_spec_options, provider)
-        else:
-            for opt, optdict in non_group_spec_options:
-                self.add_optik_option(provider, self.cmdline_parser, opt, optdict)
-        for gname, gdoc in groups:
-            gname = gname.upper()
-            goptions = [option for option in provider.options
-                        if option[1].get('group', '').upper() == gname]
-            self.add_option_group(gname, gdoc, goptions, provider)
 
-    def add_option_group(self, group_name, _, options, provider):
-        # add option group to the command line parser
-        if group_name in self._mygroups:
-            group = self._mygroups[group_name]
-        else:
-            group = self.cmdline_parser._parser.add_argument_group(
-                group_name.capitalize(), level=provider.level,
-            )
-            self._mygroups[group_name] = group
-            # add section to the config file
-            if group_name != "DEFAULT":
-                try:
-                    self.cfgfile_parser._parser.add_section(group_name)
-                except configparser.DuplicateSectionError:
-                    pass
+        self.cmdline_parser.add_option_definitions(provider.options)
+        self.cfgfile_parser.add_option_definitions(provider.options)
 
-        # add provider's specific options
-        for opt, optdict in options:
-            self.add_optik_option(provider, group, opt, optdict)
-
-    def add_optik_option(self, provider, optikcontainer, opt, optdict):
-        args, optdict = self.optik_option(provider, opt, optdict)
-        if hasattr(optikcontainer, '_parser'):
-            optikcontainer = optikcontainer._parser
-        if 'group' in optdict:
-            optikcontainer = self._mygroups[optdict['group'].upper()]
-            del optdict['group']
-
-        # Some sanity checks for things that trip up argparse
-        assert not any(' ' in arg for arg in args)
-        assert all(optdict.values())
-        assert not ('metavar' in optdict and '[' in optdict['metavar'])
-
-        level = optdict.pop('level', 0)
-        option = optikcontainer.add_argument(*args, **optdict)
-        option.level = level
-        self._all_options[opt] = provider
-        self._maxlevel = max(self._maxlevel, optdict.get('level', 0))
-
-    def optik_option(self, provider, opt, optdict):
-        """get our personal option definition and return a suitable form for
-        use with optik/argparse
-        """
-        # TODO: Changed to work with argparse but this should call
-        # self.cmdline_parser.add_argument_definitions and not use callbacks
-        optdict = copy.copy(optdict)
-        if 'action' in optdict:
-            self._nocallback_options[provider] = opt
-            if optdict['action'] == 'callback':
-                optdict['type'] = optdict['callback']
-                optdict['action'] = self.CallbackAction
-                del optdict['callback']
-        else:
-            callback = functools.partial(
-                self.cb_set_provider_option, None, '--' + str(opt), parser=None,
-            )
-            optdict['type'] = callback
-            optdict.setdefault('action', 'store')
-        # default is handled here and *must not* be given to optik if you
-        # want the whole machinery to work
-        if 'default' in optdict:
-            if ('help' in optdict
-                    and optdict.get('default') is not None
-                    and optdict['action'] not in ('store_true', 'store_false')):
-                default = optdict['default']
-                if isinstance(default, (tuple, list)):
-                    default = ','.join(str(x) for x in default)
-                optdict['help'] += ' [current: {0}]'.format(default)
-            del optdict['default']
-        args = ['--' + str(opt)]
-        if 'short' in optdict:
-            self._short_options[optdict['short']] = opt
-            args.append('-' + optdict['short'])
-            del optdict['short']
-        if optdict.get('action') == 'callback':
-            optdict['type'] = optdict['callback']
-            del optdict['action']
-            del optdict['callback']
-        if optdict.get('hide'):
-            optdict['help'] = argparse.SUPPRESS
-            del optdict['hide']
-        return args, optdict
-
-    def cb_set_provider_option(self, option, opt, value, parser):
-        """optik callback for option setting"""
-        if opt.startswith('--'):
-            # remove -- on long option
-            opt = opt[2:]
-        else:
-            # short option, get its long equivalent
-            opt = self._short_options[opt[1:]]
-        # trick since we can't set action='store_true' on options
-        if value is None:
-            value = 1
-        self.global_set_option(opt, value)
-        return value
-
-    def global_set_option(self, opt, value):
-        """set option on the correct option provider"""
-        self._all_options[opt].set_option(opt, value)
+        # Set the defaults
+        these_options = [option for option, _ in provider.options]
+        default_config = self.cmdline_parser.get_defaults(*these_options)
+        provider.config += default_config
 
     def generate_config(self, stream=None, skipsections=(), encoding=None):
         """write a configuration file according to the current configuration
@@ -474,14 +318,11 @@ class OptionsManagerMixIn(object):
         # TODO
         raise NotImplementedError
 
-    def load_provider_defaults(self):
-        """initialize configuration using default values"""
-        for provider in self.options_providers:
-            provider.load_defaults()
+    def load_config_file(self, config_file=None):
+        """Read the configuration file.
 
-    def read_config_file(self, config_file=None):
-        """read the configuration file but do not load it (i.e. dispatching
-        values to each options provider)
+        :param config_file: The path to the config file to read.
+        :type config_file: str
         """
         if config_file is None:
             config_file = self.config_file
@@ -490,7 +331,7 @@ class OptionsManagerMixIn(object):
 
         use_config_file = config_file and os.path.exists(config_file)
         if use_config_file:
-            self.cfgfile_parser.parse(config_file, Configuration())
+            self.cfgfile_parser.parse(config_file, self._global_config)
 
         if self.quiet:
             return
@@ -501,17 +342,6 @@ class OptionsManagerMixIn(object):
             msg = 'No config file found, using default configuration'
         print(msg, file=sys.stderr)
 
-    def load_config_file(self):
-        """dispatch values previously read from a configuration file to each
-        options provider)
-        """
-        for section in self.cfgfile_parser._parser.sections():
-            for option, value in self.cfgfile_parser._parser.items(section):
-                try:
-                    self.global_set_option(option, value)
-                except (KeyError, argparse.ArgumentError):
-                    # TODO handle here undeclared options appearing in the config file
-                    continue
 
     def load_configuration(self, **kwargs):
         """override configuration according to given parameters"""
@@ -521,7 +351,7 @@ class OptionsManagerMixIn(object):
         for opt, opt_value in config.items():
             opt = opt.replace('_', '-')
             provider = self._all_options[opt]
-            provider.set_option(opt, opt_value)
+            provider.config.set_option(opt, opt_value)
 
     def load_command_line_configuration(self, args=None):
         """Override configuration according to command line parameters
@@ -532,18 +362,14 @@ class OptionsManagerMixIn(object):
             args = sys.argv[1:]
         else:
             args = list(args)
-        for provider in self._nocallback_options:
-            self.cmdline_parser.parse(args, provider.config)
-        config = Configuration()
-        self.cmdline_parser.parse(args, config)
-        return config.module_or_package
+        self.cmdline_parser.parse(args, self._global_config)
+        return self._global_config.module_or_package
 
     def add_help_section(self, title, description, level=0):
         """add a dummy option section for help purpose """
         group = self.cmdline_parser._parser.add_argument_group(
             title.capitalize(), description, level=level
         )
-        self._maxlevel = max(self._maxlevel, level)
 
     def help(self, level=0):
         """return the usage string for available options """
@@ -560,19 +386,7 @@ class OptionsProviderMixIn(object):
     level = 0
 
     def __init__(self):
-        self.config = Configuration()
-        self.load_defaults()
-
-    def load_defaults(self):
-        """initialize the provider using default values"""
-        for opt, optdict in self.options:
-            action = optdict.get('action')
-            if action != 'callback':
-                # callback action have no default
-                if optdict is None:
-                    optdict = self.get_option_def(opt)
-                default = optdict.get('default')
-                self.set_option(opt, default, action, optdict)
+        self.config = None
 
     def option_attrname(self, opt, optdict=None):
         """get the config attribute corresponding to opt"""
@@ -583,39 +397,6 @@ class OptionsProviderMixIn(object):
     def option_value(self, opt):
         """get the current value for the given option"""
         return getattr(self.config, self.option_attrname(opt), None)
-
-    def set_option(self, optname, value, action=None, optdict=None):
-        """method called to set an option (registered in the options list)"""
-        if optdict is None:
-            optdict = self.get_option_def(optname)
-        if value is not None:
-            value = _validate(value, optdict, optname)
-        if action is None:
-            action = optdict.get('action', 'store')
-        if action == 'store':
-            setattr(self.config, self.option_attrname(optname, optdict), value)
-        elif action in ('store_true', 'count'):
-            setattr(self.config, self.option_attrname(optname, optdict), 0)
-        elif action == 'store_false':
-            setattr(self.config, self.option_attrname(optname, optdict), 1)
-        elif action == 'append':
-            optname = self.option_attrname(optname, optdict)
-            _list = getattr(self.config, optname, None)
-            if _list is None:
-                if isinstance(value, (list, tuple)):
-                    _list = value
-                elif value is not None:
-                    _list = []
-                    _list.append(value)
-                setattr(self.config, optname, _list)
-            elif isinstance(_list, tuple):
-                setattr(self.config, optname, _list + (value,))
-            else:
-                _list.append(value)
-        elif action == 'callback':
-            optdict['callback'](None, optname, value, None)
-        else:
-            raise UnsupportedAction(action)
 
     def get_option_def(self, opt):
         """return the dictionary defining an option given its name"""
@@ -675,32 +456,20 @@ OptionDefinition = collections.namedtuple(
 
 
 class Configuration(object):
-    def __init__(self):
-        self._option_definitions = {}
-
-    def add_option(self, option_definition):
-        name, definition = option_definition
-        if name in self._option_definitions:
-            raise exceptions.ConfigurationError('Option "{0}" already exists.')
-        self._option_definitions[name] = definition
-
-
-    def add_options(self, option_definitions):
-        for option_definition in option_definitions:
-            self.add_option(option_definition)
-
     def set_option(self, option, value):
         setattr(self, option, value)
 
     def copy(self):
         result = self.__class__()
-        result.add_options(six.iteritems(self._option_definitions))
 
-        for option in self._option_definitions:
+        for option in self.__dict__:
             value = getattr(self, option)
             setattr(result, option, value)
 
         return result
+
+    def update(self, other):
+        self += other
 
     def __add__(self, other):
         result = self.copy()
@@ -708,13 +477,17 @@ class Configuration(object):
         return result
 
     def __iadd__(self, other):
-        self._option_definitions.update(other._option_definitions)
-
-        for option in other._option_definitions:
-            value = getattr(other, option)
-            setattr(result, option, value)
+        for option in other.__dict__:
+            value = getattr(other, option, None)
+            setattr(self, option, value)
 
         return self
+
+    def __repr__(self):
+        this = self.__class__.__name__
+        items = sorted(self.__dict__.items())
+        items = ', '.join('{}={}'.format(k, repr(v)) for k, v in items)
+        return '{}({})'.format(this, items)
 
 
 class ConfigurationStore(object):
@@ -806,16 +579,50 @@ class ConfigParser(object):
     def add_option_definitions(self, option_definitions):
         self._option_definitions.update(option_definitions)
 
-        for _, definition_dict in option_definitions:
-            try:
-                group = optdict['group'].upper()
-            except KeyError:
-                continue
-            else:
-                self._option_groups.add(group)
+        self._option_groups.update(
+            d['group'].upper() for _, d in option_definitions if 'group' in d
+        )
 
     def add_option_definition(self, option_definition):
         self.add_option_definitions([option_definition])
+
+    @staticmethod
+    def _get_type_func(option_definition):
+        """Get the type function for an option definition.
+
+        :param option_definition: The option definition to get the
+            type function for.
+        :type param: OptionDefinition
+
+        :returns: The type function, which takes a single argument,
+            or None if one has not been configured.
+        :rtype: callable or None
+
+        :raises ConfigurationError: When the option definition is invalid.
+        """
+        type_ = None
+
+        option, definition = option_definition
+
+        if 'type' in definition:
+            if definition['type'] in ('choice', 'multiple_choice'):
+                if 'choices' not in definition:
+                    msg = 'No choice list given for option "{0}" of type "choice".'
+                    msg = msg.format(option)
+                    raise ConfigurationError(msg)
+
+                if definition['type'] == 'multiple_choice':
+                    validator = VALIDATORS[definition['type']]
+                    type_ = functools.partial(
+                        validator, definition['choices'], option,
+                    )
+            elif definition['type'] in VALIDATORS:
+                type_ = VALIDATORS[definition['type']]
+            else:
+                msg = 'Unsupported type "{0}"'.format(definition['type'])
+                raise ConfigurationError(msg)
+
+        return type_
 
     @abc.abstractmethod
     def parse(self, to_parse, config):
@@ -829,6 +636,7 @@ class ConfigParser(object):
 
 
 class CLIParser(ConfigParser):
+
     def __init__(self, usage=''):
         super(CLIParser, self).__init__()
 
@@ -841,25 +649,29 @@ class CLIParser(ConfigParser):
         self._parser.add_argument('module_or_package', nargs=argparse.REMAINDER)
 
     def add_option_definitions(self, option_definitions):
+        self._option_definitions.update(option_definitions)
         option_groups = collections.defaultdict(list)
 
         for option, definition in option_definitions:
             group, args, kwargs = self._convert_definition(option, definition)
-            option_groups[group].append(args, kwargs)
+            option_groups[group].append((args, kwargs))
 
         for args, kwargs in option_groups['DEFAULT']:
             self._parser.add_argument(*args, **kwargs)
 
         del option_groups['DEFAULT']
 
+        # TODO: Allow subsequent calls to this.
+        # (ie store groups to update later).
         for group, arguments in six.iteritems(option_groups):
             self._option_groups.add(group)
+            # TODO: Level from provider
             self._parser.add_argument_group(group.title())
             for args, kwargs in arguments:
                 self._parser.add_argument(*args, **kwargs)
 
-    @staticmethod
-    def _convert_definition(option, definition):
+    @classmethod
+    def _convert_definition(cls, option, definition):
         """Convert an option definition to a set of arguments for add_argument.
 
         :param option: The name of the option
@@ -880,30 +692,27 @@ class CLIParser(ConfigParser):
 
         args.append('--{0}'.format(option))
 
-        copy_keys = ('action', 'default', 'dest', 'help', 'metavar', 'level')
+        copy_keys = ('action', 'dest', 'help', 'metavar', 'level')
         kwargs = {k: definition[k] for k in copy_keys if k in definition}
 
         if 'type' in definition:
-            if definition['type'] in VALIDATORS:
-                kwargs['type'] = VALIDATORS[definition['type']]
-            elif definition['type'] in ('choice', 'multiple_choice'):
-                if 'choices' not in definition:
-                    msg = 'No choice list given for option "{0}" of type "choice".'
-                    msg = msg.format(option)
-                    raise ConfigurationError(msg)
-
-                if definition['type'] == 'multiple_choice':
-                    kwargs['type'] = VALIDATORS['csv']
-
+            kwargs['type'] = cls._get_type_func((option, definition))
+            if definition['type'] in ('choice', 'multiple_choice'):
                 kwargs['choices'] = definition['choices']
-            else:
-                msg = 'Unsupported type "{0}"'.format(definition['type'])
-                raise ConfigurationError(msg)
+
+        if definition.get('action') == 'callback':
+            callback = definition['callback']
+            kwargs['action'] = functools.partial(CallbackAction, callback)
 
         if definition.get('hide'):
             kwargs['help'] = argparse.SUPPRESS
 
         group = definition.get('group', 'DEFAULT').upper()
+
+        # Some sanity checks for things that trip up argparse
+        assert not any(' ' in arg for arg in args)
+        assert not ('metavar' in kwargs and '[' in kwargs['metavar'])
+
         return group, args, kwargs
 
     def parse(self, argv, config):
@@ -916,22 +725,50 @@ class CLIParser(ConfigParser):
         """
         self._parser.parse_args(argv, config)
 
-    def preprocess(self, argv, *options):
+    def preprocess(self, argv):
         """Do some guess work to get a value for the specified option.
 
         :param argv: The command line arguments to parse.
         :type argv: list(str)
-        :param options: The names of the options to look for.
-        :type options: str
 
         :returns: A config with the processed options.
         :rtype: Configuration
         """
-        config = Config()
-        config.add_options(self._option_definitions)
+        config = Configuration()
 
         args = self._parser.parse_known_args(argv)[0]
+        for option in vars(args):
+            config.set_option(option, getattr(args, option, None))
+
+        return config
+
+    def get_defaults(self, *options):
+        """Get the default values for the given options.
+
+        .. note::
+            This will call any callback functions.
+
+        :param options: The names options to get default values for.
+        :type options: str
+
+        :returns: The default values set on a config object.
+        :rtype: Configuration
+        """
+        config = Configuration()
+
+        # Use a new parser so that we can temporarily get defaults
+        parser = argparse.ArgumentParser()
+
         for option in options:
+            option_definition = self._option_definitions[option]
+            _, args, kwargs = self._convert_definition(option, option_definition)
+            if 'default' in option_definition:
+                kwargs['default'] = option_definition['default']
+            kwargs.pop('level', None)
+            parser.add_argument(*args, **kwargs)
+
+        args = parser.parse_known_args([])[0]
+        for option in vars(args):
             config.set_option(option, getattr(args, option, None))
 
         return config
@@ -954,17 +791,21 @@ class IniFileParser(FileParser):
         )
 
     def add_option_definitions(self, option_definitions):
+        self._option_definitions.update(option_definitions)
+
         for option, definition in option_definitions:
             group, default = self._convert_definition(option, definition)
 
-            try:
-                self._parser.add_section(group)
-            except configparser.DuplicateSectionError:
-                pass
-            else:
-                self._option_groups.add(group)
+            if group != 'DEFAULT':
+                try:
+                    self._parser.add_section(group)
+                except configparser.DuplicateSectionError:
+                    pass
+                else:
+                    self._option_groups.add(group)
 
-            self._parser['DEFAULT'].update(default)
+            if default:
+                self._parser['DEFAULT'].update(default)
 
     @staticmethod
     def _convert_definition(option, definition):
@@ -976,12 +817,32 @@ class IniFileParser(FileParser):
         :type definition: dict
 
         :returns: The converted definition.
-        :rtype: tuple(str, dict)
+        :rtype: tuple(str, dict or None)
         """
-        default = {option: definition.get('default')}
+        default = definition.get('default')
+        if isinstance(default, (list, tuple)):
+            default = ','.join(default)
+        elif isinstance(default, numbers.Number):
+            default = str(default)
+        elif isinstance(default, type(re.compile('a'))):
+            default = default.pattern
+
+        if default is not None:
+            default = {option: default}
 
         group = definition.get('group', 'DEFAULT').upper()
         return group, default
+
+    @classmethod
+    def _get_type_func(cls, option_definition):
+        type_ = super(IniFileParser, cls)._get_type_func(option_definition)
+
+        if type_:
+            definition = option_definition[1]
+            if definition['type'] == 'yn':
+                type_ = _file_yn_validator
+
+        return type_
 
     def parse(self, file_path, config):
         self._parser.read(file_path)
@@ -996,6 +857,18 @@ class IniFileParser(FileParser):
                 section = section.upper()
 
             for option, value in self._parser.items(section):
+                if option not in self._option_definitions:
+                    continue
+
+                definition = self._option_definitions[option]
+                type_ = self._get_type_func((option, definition))
+                if type_:
+                    value = type_(value)
+                # TODO: Call relevant Action
+                if definition.get('callback'):
+                    callback = definition['callback']
+                    value = callback(None, option, value, None)
+
                 config.set_option(option, value)
 
 
@@ -1018,15 +891,20 @@ class LongHelpAction(argparse.Action):
                  option_strings,
                  dest=argparse.SUPPRESS,
                  default=argparse.SUPPRESS,
-                 help=None):
+                 help=None,
+                 nargs=0,
+                 level=0,
+                 **kwargs
+                 ):
         super(LongHelpAction, self).__init__(
             option_strings=option_strings,
             dest=dest,
             default=default,
-            nargs=0,
             help=help,
+            nargs=nargs,
+            **kwargs
         )
-        self.level = 0
+        self.level = level
 
     @staticmethod
     def _parse_option_string(option_string):
@@ -1073,7 +951,7 @@ class LongHelpArgumentParser(argparse.ArgumentParser):
                     *LongHelpAction.build_add_args(new_level, self.prefix_chars),
                     action='help',
                     default=argparse.SUPPRESS,
-                    help=('show this {0} verbose help message and exit'.format(
+                    help=('show a {0} verbose help message and exit'.format(
                         ' '.join(['really'] * (new_level - 1))
                     ))
                 )
@@ -1099,7 +977,8 @@ class LongHelpArgumentParser(argparse.ArgumentParser):
         action.level = level
         return action
 
-    def add_argument_group(self, *args, level=0, **kwargs):
+    def add_argument_group(self, *args, **kwargs):
+        level = kwargs.pop('level', 0)
         group = super(LongHelpArgumentParser, self).add_argument_group(
             *args, **kwargs
         )
@@ -1143,3 +1022,17 @@ class LongHelpArgumentParser(argparse.ArgumentParser):
             if self.formatter_class.output_level is None:
                 self.formatter_class.output_level = level
         super(LongHelpArgumentParser, self).print_help(file)
+
+
+class CallbackAction(LongHelpAction):
+    """Doesn't store the value on the config."""
+    def __init__(self, callback, nargs=None, **kwargs):
+        self._callback = callback
+        nargs = nargs or int('metavar' in kwargs)
+        super(CallbackAction, self).__init__(
+            nargs=nargs, **kwargs
+        )
+
+    def __call__(self, parser, namespace, values, option_string):
+        self._callback(self, option_string, values, parser)
+        return values

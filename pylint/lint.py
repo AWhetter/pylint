@@ -266,8 +266,7 @@ class PyLinter(config.OptionsManagerMixIn,
     level = 0
     msgs = MSGS
 
-    @staticmethod
-    def make_options():
+    def make_options(self):
         return (('ignore',
                  {'type' : 'csv', 'metavar' : '<file>,...',
                   'dest' : 'black_list', 'default' : ('CVS',),
@@ -294,6 +293,7 @@ class PyLinter(config.OptionsManagerMixIn,
 
                 ('output-format',
                  {'default': 'text', 'type': 'string', 'metavar' : '<format>',
+                  'action': 'callback', 'callback': self._set_output_format,
                   'short': 'f',
                   'group': 'Reports',
                   'help' : 'Set the output format. Available formats are text,'
@@ -327,7 +327,7 @@ class PyLinter(config.OptionsManagerMixIn,
                   'help': 'Activate the evaluation score.'}),
 
                 ('confidence',
-                 {'type' : 'multiple_choice', 'metavar': '<levels>',
+                 {'type' : 'multiple_choice', 'metavar': '<levels>,...',
                   'default': '',
                   'choices': [c.name for c in interfaces.CONFIDENCE_LEVELS],
                   'group': 'Messages control',
@@ -337,6 +337,7 @@ class PyLinter(config.OptionsManagerMixIn,
 
                 ('enable',
                  {'type' : 'csv', 'metavar': '<msg ids>',
+                  'action': 'callback', 'callback': self._enable_disable_msg,
                   'short': 'e',
                   'group': 'Messages control',
                   'help' : 'Enable the message, report, category or checker with the '
@@ -348,6 +349,7 @@ class PyLinter(config.OptionsManagerMixIn,
 
                 ('disable',
                  {'type' : 'csv', 'metavar': '<msg ids>',
+                  'action': 'callback', 'callback': self._enable_disable_msg,
                   'short': 'd',
                   'group': 'Messages control',
                   'help' : 'Disable the message, report, category or checker '
@@ -422,7 +424,7 @@ class PyLinter(config.OptionsManagerMixIn,
         self.stats = None
         # init options
         self._external_opts = options
-        self.options = options + PyLinter.make_options()
+        self.options = options + self.make_options()
         self.option_groups = option_groups + PyLinter.option_groups
         self._options_methods = {
             'enable': self.enable,
@@ -450,7 +452,6 @@ class PyLinter(config.OptionsManagerMixIn,
         self._dynamic_plugins = set()
         self._python3_porting_mode = False
         self._error_mode = False
-        self.load_provider_defaults()
         if reporter:
             self.set_reporter(reporter)
 
@@ -474,7 +475,7 @@ class PyLinter(config.OptionsManagerMixIn,
             module.register(self)
 
     def _load_reporter(self):
-        name = self._reporter_name.lower()
+        name = (self._reporter_name or self.config.output_format).lower()
         if name in self._reporters:
             self.set_reporter(self._reporters[name]())
         else:
@@ -486,7 +487,7 @@ class PyLinter(config.OptionsManagerMixIn,
                 self.set_reporter(reporter_class())
 
     def _load_reporter_class(self):
-        qname = self._reporter_name
+        qname = self._reporter_name or self.config.output_format
         module = modutils.load_module_from_name(
             modutils.get_module_part(qname))
         class_name = qname.split('.')[-1]
@@ -498,40 +499,34 @@ class PyLinter(config.OptionsManagerMixIn,
         self.reporter = reporter
         reporter.linter = self
 
-    def set_option(self, optname, value, action=None, optdict=None):
-        """overridden from config.OptionsProviderMixin to handle some
-        special options
-        """
-        if optname in self._options_methods or \
-                optname in self._bw_options_methods:
+    def _enable_disable_msg(self, action, option, value, parser):
+        option = option.lstrip('-')
+
+        if (option in self._options_methods
+                or option in self._bw_options_methods):
             if value:
                 try:
-                    meth = self._options_methods[optname]
+                    meth = self._options_methods[option]
                 except KeyError:
-                    meth = self._bw_options_methods[optname]
-                    warnings.warn('%s is deprecated, replace it by %s' % (optname,
-                                                                          optname.split('-')[0]),
-                                  DeprecationWarning)
+                    meth = self._bw_options_methods[option]
+                    msg = '{0} is deprecated, replace it with {1}'.format(
+                        option, option.split('-')[0]
+                    )
+                    warnings.warn(msg, DeprecationWarning)
+
                 value = utils._check_csv(value)
                 if isinstance(value, (list, tuple)):
                     for _id in value:
                         meth(_id, ignore_unknown=True)
                 else:
                     meth(value)
-                return # no need to call set_option, disable/enable methods do it
-        elif optname == 'output-format':
-            self._reporter_name = value
-            # If the reporters are already available, load
-            # the reporter class.
-            if self._reporters:
-                self._load_reporter()
 
-        try:
-            checkers.BaseTokenChecker.set_option(self, optname,
-                                                 value, action, optdict)
-        except config.UnsupportedAction:
-            print('option %s can\'t be read from config file' % \
-                  optname, file=sys.stderr)
+    def _set_output_format(self, action, option, value, parser):
+        self._reporter_name = value
+        # If the reporters are already available, load
+        # the reporter class.
+        if self._reporters:
+            self._load_reporter()
 
     def register_reporter(self, reporter_class):
         self._reporters[reporter_class.name] = reporter_class
@@ -562,7 +557,6 @@ class PyLinter(config.OptionsManagerMixIn,
         self.register_options_provider(checker)
         if hasattr(checker, 'msgs'):
             self.msgs_store.register_messages(checker)
-        checker.load_defaults()
 
         # Register the checker, but disable all of its messages.
         # TODO(cpopa): we should have a better API for this.
@@ -597,9 +591,9 @@ class PyLinter(config.OptionsManagerMixIn,
                     self.enable(msg_id)
         else:
             self.disable('python3')
-        self.set_option('reports', False)
-        self.set_option('persistent', False)
-        self.set_option('score', False)
+        self.config.reports = False
+        self.config.persistent = False
+        self.config.score = False
 
     def python3_porting_mode(self):
         """Disable all other checkers and enable Python 3 warnings."""
@@ -1165,7 +1159,6 @@ group are mutually exclusive.'),
         # read configuration
         linter.disable('I')
         linter.enable('c-extension-no-member')
-        linter.read_config_file()
         config_parser = linter.cfgfile_parser
         # run init hook, if present, before loading plugins
         if config_parser._parser.has_option('MASTER', 'init-hook'):
@@ -1203,7 +1196,7 @@ group are mutually exclusive.'),
             if multiprocessing is None:
                 print("Multiprocessing library is missing, "
                       "fallback to single process", file=sys.stderr)
-                linter.set_option("jobs", 1)
+                linter.config.jobs = 1
             elif linter.config.jobs == 0:
                 linter.config.jobs = multiprocessing.cpu_count()
 
