@@ -33,6 +33,11 @@ Release date: TBA
 
 * Allow parallel linting when run under Prospector
 
+* Added a new ``--recursive`` flag to recurse into directories given
+  on the command line to find source files to lint.
+
+  Closes #352
+
 
 What's New in Pylint 2.4.3?
 ===========================

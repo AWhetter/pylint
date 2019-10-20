@@ -355,9 +355,7 @@ def test_modules_expand_modules(extra_path, files_or_modules, expected):
                     ),
                     "name": "case1.pkg1",
                     "isarg": False,
-                    "basepath": str(
-                        _DATA_DIR / "expand_modules_data/case1"
-                    ),
+                    "basepath": str(_DATA_DIR / "expand_modules_data/case1"),
                     "basename": "case1",
                 },
                 {
@@ -366,9 +364,7 @@ def test_modules_expand_modules(extra_path, files_or_modules, expected):
                     ),
                     "name": "case1.pkg1.submodule1",
                     "isarg": False,
-                    "basepath": str(
-                        _DATA_DIR / "expand_modules_data/case1"
-                    ),
+                    "basepath": str(_DATA_DIR / "expand_modules_data/case1"),
                     "basename": "case1",
                 },
                 {
@@ -377,9 +373,7 @@ def test_modules_expand_modules(extra_path, files_or_modules, expected):
                     ),
                     "name": "case1.pkg1.submodule2",
                     "isarg": False,
-                    "basepath": str(
-                        _DATA_DIR / "expand_modules_data/case1"
-                    ),
+                    "basepath": str(_DATA_DIR / "expand_modules_data/case1"),
                     "basename": "case1",
                 },
                 {
@@ -388,9 +382,7 @@ def test_modules_expand_modules(extra_path, files_or_modules, expected):
                     ),
                     "name": "case1.pkg1.subpkg1.__init__",
                     "isarg": False,
-                    "basepath": str(
-                        _DATA_DIR / "expand_modules_data/case1"
-                    ),
+                    "basepath": str(_DATA_DIR / "expand_modules_data/case1"),
                     "basename": "case1",
                 },
                 {
@@ -400,9 +392,7 @@ def test_modules_expand_modules(extra_path, files_or_modules, expected):
                     ),
                     "name": "case1.pkg1.subpkg1.submodulea",
                     "isarg": False,
-                    "basepath": str(
-                        _DATA_DIR / "expand_modules_data/case1"
-                    ),
+                    "basepath": str(_DATA_DIR / "expand_modules_data/case1"),
                     "basename": "case1",
                 },
                 {
@@ -412,9 +402,7 @@ def test_modules_expand_modules(extra_path, files_or_modules, expected):
                     ),
                     "name": "case1.pkg1.subpkg1.submoduleb",
                     "isarg": False,
-                    "basepath": str(
-                        _DATA_DIR / "expand_modules_data/case1"
-                    ),
+                    "basepath": str(_DATA_DIR / "expand_modules_data/case1"),
                     "basename": "case1",
                 },
             ],
@@ -437,6 +425,119 @@ def test_modules_expand_modules(extra_path, files_or_modules, expected):
                     ),
                     "name": "case1.pkg1",
                     "isarg": False,
+                    "basepath": str(_DATA_DIR / "expand_modules_data/case1"),
+                    "basename": "case1",
+                },
+                {
+                    "path": str(
+                        _DATA_DIR / "expand_modules_data/case1/pkg1/submodule1.py"
+                    ),
+                    "name": "case1.pkg1.submodule1",
+                    "isarg": False,
+                    "basepath": str(_DATA_DIR / "expand_modules_data/case1"),
+                    "basename": "case1",
+                },
+                {
+                    "path": str(
+                        _DATA_DIR / "expand_modules_data/case1/pkg1/submodule2.py"
+                    ),
+                    "name": "case1.pkg1.submodule2",
+                    "isarg": False,
+                    "basepath": str(_DATA_DIR / "expand_modules_data/case1"),
+                    "basename": "case1",
+                },
+                {
+                    "path": str(
+                        _DATA_DIR / "expand_modules_data/case1/pkg1/subpkg1/__init__.py"
+                    ),
+                    "name": "case1.pkg1.subpkg1.__init__",
+                    "isarg": False,
+                    "basepath": str(_DATA_DIR / "expand_modules_data/case1"),
+                    "basename": "case1",
+                },
+                {
+                    "path": str(
+                        _DATA_DIR
+                        / "expand_modules_data/case1/pkg1/subpkg1/submodulea.py"
+                    ),
+                    "name": "case1.pkg1.subpkg1.submodulea",
+                    "isarg": False,
+                    "basepath": str(_DATA_DIR / "expand_modules_data/case1"),
+                    "basename": "case1",
+                },
+                {
+                    "path": str(
+                        _DATA_DIR
+                        / "expand_modules_data/case1/pkg1/subpkg1/submoduleb.py"
+                    ),
+                    "name": "case1.pkg1.subpkg1.submoduleb",
+                    "isarg": False,
+                    "basepath": str(_DATA_DIR / "expand_modules_data/case1"),
+                    "basename": "case1",
+                },
+            ],
+            marks=pytest.mark.xfail(),
+        ),
+    ],
+)
+def test_namespace_expand_modules(extra_path, files_or_modules, expected):
+    with fix_import_path(extra_path):
+        found = utils.expand_modules(files_or_modules, (), ())
+    sorted_found = (
+        sorted(found[0], key=(lambda item: item["path"])),
+        sorted(found[1], key=(lambda item: item["ex"])),
+    )
+    assert sorted_found == (expected, [])
+
+
+@pytest.mark.parametrize(
+    "files_or_modules,expected",
+    [
+        (
+            [str(_DATA_DIR / "expand_modules_data/case1")],
+            [
+                {
+                    "path": str(_DATA_DIR / "expand_modules_data/case1/__init__.py"),
+                    "name": "case1",
+                    "isarg": True,
+                    "basepath": str(
+                        _DATA_DIR / "expand_modules_data/case1/__init__.py"
+                    ),
+                    "basename": "case1",
+                }
+            ],
+        )
+    ],
+)
+def test_non_recursive_expand_modules(files_or_modules, expected):
+    with fix_import_path(files_or_modules):
+        found = utils.expand_modules(files_or_modules, (), ())
+    sorted_found = (
+        sorted(found[0], key=(lambda item: item["path"])),
+        sorted(found[1], key=(lambda item: item["ex"])),
+    )
+    assert sorted_found == (expected, [])
+
+
+@pytest.mark.parametrize(
+    "files_or_modules,expected",
+    [
+        (
+            [str(_DATA_DIR / "expand_modules_data/case1")],
+            [
+                {
+                    "path": str(_DATA_DIR / "expand_modules_data/case1/module1.py"),
+                    "name": "module1",
+                    "isarg": False,
+                    "basepath": str(_DATA_DIR / "expand_modules_data/case1"),
+                    "basename": "case1",
+                },
+                {
+                    "path": str(
+                        _DATA_DIR / "expand_modules_data/case1/pkg1/__init__.py"
+                    ),
+                    "name": "pkg1.__init__",
+                    "isarg": False,
                     "basepath": str(
                         _DATA_DIR / "expand_modules_data/case1"
                     ),
@@ -446,7 +547,7 @@ def test_modules_expand_modules(extra_path, files_or_modules, expected):
                     "path": str(
                         _DATA_DIR / "expand_modules_data/case1/pkg1/submodule1.py"
                     ),
-                    "name": "case1.pkg1.submodule1",
+                    "name": "pkg1.submodule1",
                     "isarg": False,
                     "basepath": str(
                         _DATA_DIR / "expand_modules_data/case1"
@@ -457,7 +558,7 @@ def test_modules_expand_modules(extra_path, files_or_modules, expected):
                     "path": str(
                         _DATA_DIR / "expand_modules_data/case1/pkg1/submodule2.py"
                     ),
-                    "name": "case1.pkg1.submodule2",
+                    "name": "pkg1.submodule2",
                     "isarg": False,
                     "basepath": str(
                         _DATA_DIR / "expand_modules_data/case1"
@@ -468,7 +569,7 @@ def test_modules_expand_modules(extra_path, files_or_modules, expected):
                     "path": str(
                         _DATA_DIR / "expand_modules_data/case1/pkg1/subpkg1/__init__.py"
                     ),
-                    "name": "case1.pkg1.subpkg1.__init__",
+                    "name": "pkg1.subpkg1.__init__",
                     "isarg": False,
                     "basepath": str(
                         _DATA_DIR / "expand_modules_data/case1"
@@ -480,7 +581,7 @@ def test_modules_expand_modules(extra_path, files_or_modules, expected):
                         _DATA_DIR
                         / "expand_modules_data/case1/pkg1/subpkg1/submodulea.py"
                     ),
-                    "name": "case1.pkg1.subpkg1.submodulea",
+                    "name": "pkg1.subpkg1.submodulea",
                     "isarg": False,
                     "basepath": str(
                         _DATA_DIR / "expand_modules_data/case1"
@@ -492,7 +593,7 @@ def test_modules_expand_modules(extra_path, files_or_modules, expected):
                         _DATA_DIR
                         / "expand_modules_data/case1/pkg1/subpkg1/submoduleb.py"
                     ),
-                    "name": "case1.pkg1.subpkg1.submoduleb",
+                    "name": "pkg1.subpkg1.submoduleb",
                     "isarg": False,
                     "basepath": str(
                         _DATA_DIR / "expand_modules_data/case1"
@@ -500,13 +601,12 @@ def test_modules_expand_modules(extra_path, files_or_modules, expected):
                     "basename": "case1",
                 },
             ],
-            marks=pytest.mark.xfail(),
-        ),
+        )
     ],
 )
-def test_namespace_expand_modules(extra_path, files_or_modules, expected):
-    with fix_import_path(extra_path):
-        found = utils.expand_modules(files_or_modules, (), ())
+def test_recursive_expand_modules(files_or_modules, expected):
+    with fix_import_path(files_or_modules):
+        found = utils.expand_modules(files_or_modules, (), (), recursive=True)
     sorted_found = (
         sorted(found[0], key=(lambda item: item["path"])),
         sorted(found[1], key=(lambda item: item["ex"])),

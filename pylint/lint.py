@@ -522,6 +522,16 @@ class PyLinter(
                     ),
                 },
             ),
+            (
+                "recursive",
+                {
+                    "action": "store_true",
+                    "help": (
+                        "Recurse into any directories in module_or_package to "
+                        "find source files to lint."
+                    ),
+                },
+            ),
         )
 
     option_groups = (
@@ -1059,7 +1069,10 @@ class PyLinter(
         """get modules and errors from a list of modules and handle errors
         """
         result, errors = utils.expand_modules(
-            modules, self.config.black_list, self.config.black_list_re
+            modules,
+            self.config.black_list,
+            self.config.black_list_re,
+            self.config.recursive,
         )
         for error in errors:
             message = modname = error["mod"]

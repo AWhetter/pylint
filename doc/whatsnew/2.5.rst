@@ -32,3 +32,6 @@ Other Changes
   These files can also be passed in on the command line.
 
 * Mutable ``collections.*`` are now flagged as dangerous defaults.
+
+* Added a new ``--recursive`` flag to recurse into directories given
+  on the command line to find source files to lint.

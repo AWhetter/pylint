@@ -116,7 +116,7 @@ def _modpath_from_file(filename, is_namespace):
     )
 
 
-def expand_modules(files_or_modules, black_list, black_list_re):
+def expand_modules(files_or_modules, black_list, black_list_re, recursive=False):
     """take a list of files/modules/packages and return the list of tuple
     (file, module name) which have to be actually checked
     """
@@ -135,6 +135,8 @@ def expand_modules(files_or_modules, black_list, black_list_re):
                 modname = splitext(basename(something))[0]
             if isdir(something):
                 filepath = join(something, "__init__.py")
+                if recursive and not exists(filepath):
+                    filepath = something
             else:
                 filepath = something
         else:
@@ -163,7 +165,7 @@ def expand_modules(files_or_modules, black_list, black_list_re):
             is_namespace = modutils.is_namespace(spec)
             is_directory = modutils.is_directory(spec)
 
-        if not is_namespace:
+        if not is_namespace and not (recursive and is_directory):
             result.append(
                 {
                     "path": filepath,
@@ -180,8 +182,10 @@ def expand_modules(files_or_modules, black_list, black_list_re):
         )
 
         if has_init or is_namespace or is_directory:
+            src_directory = filepath if is_directory else dirname(filepath)
+            list_all = is_namespace or (is_directory and recursive)
             for subfilepath in modutils.get_module_files(
-                dirname(filepath), black_list, list_all=is_namespace
+                src_directory, black_list, list_all=list_all
             ):
                 if filepath == subfilepath:
                     continue
